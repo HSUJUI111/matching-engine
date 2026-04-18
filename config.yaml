@@ -1,0 +1,14 @@
+app:
+  name: "matching-engine"
+  env: "dev"
+
+postgres:
+  dsn: "host=127.0.0.1 user=postgres password=root dbname=matching_db port=5432 sslmode=disable TimeZone=Asia/Shanghai"
+  max_idle_conns: 10
+  max_open_conns: 100
+
+kafka:
+  brokers: 
+    - "127.0.0.1:9092"
+  topic_orders: "orders_topic"
+  topic_trades: "trades_topic"
