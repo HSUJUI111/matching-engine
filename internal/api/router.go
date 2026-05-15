@@ -86,17 +86,31 @@ func SetupRouter() *gin.Engine {
 		})
 	})
 
-	// // 3. 激动人心的时刻：把订单塞进你手写的撮合引擎！！
-	// trades := book.Match(order)
-
-	// // 4. 把引擎的处理结果返回给前端
-	// c.JSON(http.StatusOK, gin.H{
-	// 	"message":          "订单接收成功",
-	// 	"order_id":         order.ID,
-	// 	"order_status":     order.Status,    // 看看是全部成交了，还是挂在树上了
-	// 	"filled_qty":       order.FilledQty, // 看看成交了多少
-	// 	"trades_generated": trades,          // 看看生成了几笔成交记录
-	// })
-
+	// 撤单接口
+	r.POST("/api/order/:id/cancel", func(c *gin.Context) {
+		idStr := c.Param("id")
+		orderID, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的订单ID"})
+			return
+		}
+		//1.先查数据库，确认订单存在+检查状态
+		order, err := repo.GetOrder(orderID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "找不到该订单"})
+			return
+		}
+		//2.幂等处理：已结束的订单直接返回
+		if order.Status == int8(domain.OrderStatusFilled) || order.Status == int8(domain.OrderStatusCanceled) {
+			c.JSON(http.StatusOK, gin.H{"message": "订单已结束，无需撤单"})
+			return
+		}
+		//3. 发撤单消息到Kafka (和下单走同一分区，保序)
+		if err := kafka.SendCancel(orderID, order.Symbol); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "发送撤单请求失败"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"message": "撤单请求已发送，正在处理中", "order_id": orderID})
+	})
 	return r
 }

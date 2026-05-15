@@ -17,6 +17,11 @@ type PriceLevel struct {
 	Order *list.List
 }
 
+type orderEntry struct {
+	element    *list.Element
+	priceLevel *PriceLevel
+	tree       *redblacktree.Tree
+}
 type OrderBook struct {
 	Symbol string
 	// Bids 买盘：愿意买入的订单。出价最高的人排在最前面！(降序)
@@ -27,8 +32,9 @@ type OrderBook struct {
 	// 保护红黑树并发读写的读写锁
 	mu sync.RWMutex
 
-	TradeCh       chan *domain.Trade //将成交记录传给记账协程
-	OrderUpdateCh chan *domain.Order //更新订单管道
+	orderIndex    map[int64]*orderEntry //订单ID到订单位置的索引，方便快速更新和删除
+	TradeCh       chan *domain.Trade    //将成交记录传给记账协程
+	OrderUpdateCh chan *domain.Order    //更新订单管道
 }
 
 func NewOrderBook(symbol string) *OrderBook {
@@ -36,7 +42,7 @@ func NewOrderBook(symbol string) *OrderBook {
 		Symbol: symbol,
 		Bids: redblacktree.NewWith(func(a, b interface{}) int {
 			p1 := a.(int64)
-			p2 := a.(int64)
+			p2 := b.(int64)
 			if p1 > p2 {
 				return -1
 			} else if p1 < p2 {
@@ -54,7 +60,7 @@ func NewOrderBook(symbol string) *OrderBook {
 			}
 			return 0
 		}),
-
+		orderIndex:    make(map[int64]*orderEntry),
 		TradeCh:       make(chan *domain.Trade, 10000),
 		OrderUpdateCh: make(chan *domain.Order, 10000),
 	}
@@ -80,9 +86,6 @@ func (ob *OrderBook) asyncOrderUpdater() {
 
 // 不带锁
 func (ob *OrderBook) add(order *domain.Order) {
-	// ob.mu.Lock()
-	// defer ob.mu.Unlock()
-
 	var tree *redblacktree.Tree
 	if order.Side == domain.Buy {
 		tree = ob.Bids
@@ -92,18 +95,22 @@ func (ob *OrderBook) add(order *domain.Order) {
 
 	//查找该价位是否已经存在
 	node, ok := tree.Get(order.Price)
+	var pl *PriceLevel
 	if ok {
-		// 存在，追加到该价格队列的尾部（先进先出原则）
-		priceLevel := node.(*PriceLevel)
-		priceLevel.Order.PushBack(order)
+		pl = node.(*PriceLevel)
+		pl.Order.PushBack(order)
 	} else {
-		//不存在创建新挡位和新队列
-		priceLevel := &PriceLevel{
-			Price: order.Price,
-			Order: list.New(),
-		}
-		priceLevel.Order.PushBack(order)
-		tree.Put(order.Price, priceLevel)
+		pl = &PriceLevel{Price: order.Price, Order: list.New()}
+		pl.Order.PushBack(order)
+		tree.Put(order.Price, pl)
+	}
+
+	//注册到索引
+	elem := pl.Order.Back() //刚才新加的订单，一定在队列的最后面
+	ob.orderIndex[order.ID] = &orderEntry{
+		element:    elem,
+		priceLevel: pl,
+		tree:       tree,
 	}
 }
 
@@ -178,8 +185,11 @@ func (ob *OrderBook) Match(takerOrder *domain.Order) []*domain.Trade {
 
 			//情况一,把Maker提出队列
 			if makerOrder.UnfilledQty() == 0 {
-				makerOrder.Status = 2
+				makerOrder.Status = domain.OrderStatusFilled
 				queue.Remove(element)
+				delete(ob.orderIndex, makerOrder.ID) // ★ 成交完移除索引
+				// makerOrder.Status = 2
+				// queue.Remove(element)
 			} else {
 				makerOrder.Status = 1
 			}
@@ -205,4 +215,26 @@ func (ob *OrderBook) Match(takerOrder *domain.Order) []*domain.Trade {
 		// ob.AddOrder(takerOrder)
 	}
 	return trades
+}
+
+func (ob *OrderBook) CancelOrder(orderID int64) (*domain.Order, bool) {
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+
+	entry, exists := ob.orderIndex[orderID]
+	if !exists {
+		//不在内存里：已全部成交or订单ID根本不存在
+		return nil, false
+	}
+	order := entry.element.Value.(*domain.Order)
+	entry.priceLevel.Order.Remove(entry.element)
+	delete(ob.orderIndex, orderID)
+
+	//价位队列空了就拔树根，防止内存泄漏
+	if entry.priceLevel.Order.Len() == 0 {
+		entry.tree.Remove(entry.priceLevel.Price)
+	}
+	order.Status = domain.OrderStatusCanceled
+	ob.OrderUpdateCh <- order //通知数据库更新订单状态
+	return order, true
 }
