@@ -37,6 +37,16 @@ type OrderBook struct {
 	OrderUpdateCh chan *domain.Order    //更新订单管道
 }
 
+type PriceLevelSnapshot struct {
+	Price    int64 `json:"price"`
+	Quantity int64 `json:"quantity"` //这个价位上所有订单的总剩余数量
+}
+type OrderBookSnapshot struct {
+	Symbol string                `json:"symbol"`
+	Bids   []*PriceLevelSnapshot `json:"bids"` // 买盘
+	Asks   []*PriceLevelSnapshot `json:"asks"` // 卖盘
+}
+
 func NewOrderBook(symbol string) *OrderBook {
 	ob := &OrderBook{
 		Symbol: symbol,
@@ -53,9 +63,9 @@ func NewOrderBook(symbol string) *OrderBook {
 		Asks: redblacktree.NewWith(func(a, b interface{}) int {
 			p1 := a.(int64)
 			p2 := b.(int64)
-			if p1 < p2 {
+			if p1 > p2 {
 				return -1 // p1 小，排前面
-			} else if p1 > p2 {
+			} else if p1 < p2 {
 				return 1
 			}
 			return 0
@@ -237,4 +247,47 @@ func (ob *OrderBook) CancelOrder(orderID int64) (*domain.Order, bool) {
 	order.Status = domain.OrderStatusCanceled
 	ob.OrderUpdateCh <- order //通知数据库更新订单状态
 	return order, true
+}
+
+// GetSnapshot 获取盘口快照，depth 表示买卖各取几档
+func (ob *OrderBook) GetSnapshot(depth int) *OrderBookSnapshot {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+
+	snapshot := &OrderBookSnapshot{
+		Symbol: ob.Symbol,
+		Bids:   make([]*PriceLevelSnapshot, 0, depth),
+		Asks:   make([]*PriceLevelSnapshot, 0, depth),
+	}
+
+	bidIt := ob.Bids.Iterator()
+	bidIt.Begin()
+	for bidIt.Next() && len(snapshot.Bids) < depth {
+		pl := bidIt.Value().(*PriceLevel)
+		snapshot.Bids = append(snapshot.Bids, &PriceLevelSnapshot{
+			Price:    pl.Price,
+			Quantity: sumUnfilled(pl),
+		})
+	}
+
+	askIt := ob.Asks.Iterator()
+	askIt.Begin()
+	for askIt.Next() && len(snapshot.Asks) < depth {
+		pl := askIt.Value().(*PriceLevel)
+		snapshot.Asks = append(snapshot.Asks, &PriceLevelSnapshot{
+			Price:    pl.Price,
+			Quantity: sumUnfilled(pl),
+		})
+	}
+
+	return snapshot
+}
+
+func sumUnfilled(pl *PriceLevel) int64 {
+	var total int64
+	for e := pl.Order.Front(); e != nil; e = e.Next() {
+		order := e.Value.(*domain.Order)
+		total += order.UnfilledQty()
+	}
+	return total
 }

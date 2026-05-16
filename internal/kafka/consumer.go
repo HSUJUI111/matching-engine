@@ -11,7 +11,7 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-func StartConsumer(brokers []string, topic string, book *orderbook.OrderBook) {
+func StartConsumer(brokers []string, topic string, manager *orderbook.BookManager) {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers: brokers,
 		Topic:   topic,
@@ -43,13 +43,19 @@ func StartConsumer(brokers []string, topic string, book *orderbook.OrderBook) {
 			case domain.MsgTypeNew:
 				order := msg.Order
 				// 1. 引擎处理前：先把这笔新订单存进数据库 (状态是 Pending 挂单中)
+				book := manager.GetOrCreate(order.Symbol)
 				repo.SaveOrUpdateOrder(order)
 				log.Printf("📥 新订单 [%s] 价格:%d 数量:%d", order.Symbol, order.Price, order.Quantity)
 				book.Match(order)
 				repo.SaveOrUpdateOrder(order)
 
 			case domain.MsgTypeCancel:
-				log.Printf("🚫 撤单请求 OrderID:%d", msg.OrderID)
+				book := manager.Get(msg.Symbol)
+				if book == nil {
+					log.Printf("⚠️ 撤单失败：symbol [%s] 不存在", msg.Symbol)
+					continue
+				}
+				log.Printf("🚫 撤单请求 OrderID:%d Symbol:%s", msg.OrderID, msg.Symbol)
 				_, ok := book.CancelOrder(msg.OrderID)
 				if !ok {
 					log.Printf("⚠️ 撤单失败 OrderID:%d 不在内存中（已成交或不存在）", msg.OrderID)

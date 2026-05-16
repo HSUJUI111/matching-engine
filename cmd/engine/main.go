@@ -27,18 +27,21 @@ func main() {
 	// ==========================================
 	log.Println("🚀 正在初始化核心撮合引擎...")
 	// 在内存里造一本属于特斯拉 (TSLA) 的订单簿
-	tsmcBook := orderbook.NewOrderBook("2330.TW")
+	// tsmcBook := orderbook.NewOrderBook("2330.TW")
 	// tslaBook := orderbook.NewOrderBook("TSLA")
+
+	manager := orderbook.NewBookManager()
+	for _, sym := range cfg.Engine.Symbols {
+		manager.GetOrCreate(sym)
+		log.Printf("✅ 已创建订单簿: %s", sym)
+	}
 
 	// 4. 【新增】初始化 Kafka 生产者 (面向前端发单)
 	kafka.InitProducer(cfg.Kafka.Brokers, cfg.Kafka.TopicOrders)
 
 	// 5. 【新增】启动 Kafka 消费者 (连接引擎和 Kafka)
-	kafka.StartConsumer(cfg.Kafka.Brokers, cfg.Kafka.TopicOrders, tsmcBook)
-	r := api.SetupRouter()
-
-	// log.Println("✅ Web 接口挂载成功！正在监听 8080 端口...")
-	// log.Println("👉 尝试发送请求测试：http://localhost:8080/api/order")
+	kafka.StartConsumer(cfg.Kafka.Brokers, cfg.Kafka.TopicOrders, manager)
+	r := api.SetupRouter(manager)
 
 	// 启动 Web 服务器，程序会在这里阻塞运行
 	err = r.Run(":8080")

@@ -12,6 +12,7 @@ type Config struct {
 	App      AppConfig      `mapstructure:"app"`
 	Postgres PostgresConfig `mapstructure:"postgres"`
 	Kafka    KafkaConfig    `mapstructure:"kafka"`
+	Engine   EngineConfig   `mapstructure:"engine"`
 }
 
 type AppConfig struct {
@@ -29,6 +30,10 @@ type KafkaConfig struct {
 	Brokers     []string `mapstructure:"brokers"`
 	TopicOrders string   `mapstructure:"topic_orders"`
 	TopicTrades string   `mapstructure:"topic_trades"`
+}
+
+type EngineConfig struct {
+	Symbols []string `mapstructure:"symbols"`
 }
 
 // Load 读取配置文件并融合环境变量

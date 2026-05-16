@@ -12,3 +12,9 @@ kafka:
     - "127.0.0.1:9092"
   topic_orders: "orders_topic"
   topic_trades: "trades_topic"
+
+engine:
+  symbols:
+    - 2330.TW
+    - 2337.TW
+    - 3481.TW

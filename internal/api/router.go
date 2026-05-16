@@ -7,6 +7,7 @@ import (
 
 	"matching-engine/internal/domain"
 	"matching-engine/internal/kafka"
+	"matching-engine/internal/orderbook"
 	"matching-engine/internal/repo"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,7 @@ type OrderRequest struct {
 }
 
 // SetupRouter 初始化并配置路由
-func SetupRouter() *gin.Engine {
+func SetupRouter(manager *orderbook.BookManager) *gin.Engine {
 	// 创建一个默认的 Gin 引擎
 	r := gin.Default()
 
@@ -112,5 +113,26 @@ func SetupRouter() *gin.Engine {
 		}
 		c.JSON(http.StatusOK, gin.H{"message": "撤单请求已发送，正在处理中", "order_id": orderID})
 	})
+
+	//盘口快照
+	r.GET("/api/orderbook/:symbol", func(c *gin.Context) {
+		symbol := c.Param("symbol")
+
+		book := manager.Get(symbol)
+		if book == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "symbol 不存在"})
+			return
+		}
+
+		depthStr := c.DefaultQuery("depth", "5")
+		depth, err := strconv.Atoi(depthStr)
+		if err != nil || depth <= 0 || depth > 50 {
+			depth = 5
+		}
+
+		snapshot := book.GetSnapshot(depth)
+		c.JSON(http.StatusOK, snapshot)
+	})
+
 	return r
 }
